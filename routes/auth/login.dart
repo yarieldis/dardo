@@ -2,10 +2,9 @@ import 'dart:convert';
 
 import 'package:dart_frog/dart_frog.dart';
 import 'package:dardo/auth/jwt.dart';
-import 'package:dardo/auth/users.dart';
+import 'package:dardo/auth/user_store.dart';
 
 final _jwt = JwtHelper();
-final _users = UserStore();
 
 Future<Response> onRequest(RequestContext context) async {
   if (context.request.method != HttpMethod.post) {
@@ -35,7 +34,8 @@ Future<Response> onRequest(RequestContext context) async {
     );
   }
 
-  final claims = _users.validate(username, password);
+  final store = context.read<UserStore>();
+  final claims = await store.validate(username, password);
   if (claims == null) {
     return Response.json(
       body: {'error': 'Invalid credentials'},

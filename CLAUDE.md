@@ -18,24 +18,45 @@ This file provides guidance to Claude Code when working with the **Dardo** REST 
 **Technology Stack**:
 - Dart SDK ^3.11.0
 - Dart Frog ^1.1.0
+- JWT auth via `dart_jsonwebtoken`
+- Password hashing via `bcrypt`
+- SQLite via `sqflite_common_ffi` (in-memory store used in dev by default)
 
 ## Project Structure
 
 ```
 root/
-├── lib/auth/              # Auth helpers (JWT, claims, user store)
-│   ├── claims.dart        # AuthClaims model
-│   ├── jwt.dart           # JWT sign/verify
-│   └── users.dart         # In-memory user store
+├── lib/auth/
+│   ├── claims.dart              # AuthClaims model
+│   ├── jwt.dart                 # JWT sign/verify
+│   ├── user.dart                # User model
+│   ├── user_store.dart          # Abstract UserStore interface
+│   ├── in_memory_user_store.dart # In-memory UserStore (dev default)
+│   ├── sqlite_user_store.dart   # SQLite-backed UserStore
+│   ├── password_hasher.dart     # bcrypt password hashing
+│   └── migration_runner.dart    # Runs SQL migration files
+├── migrations/
+│   └── 001_create_users.sql     # Users table schema
 ├── routes/
-│   ├── _middleware.dart   # Global auth middleware (Bearer token)
+│   ├── _middleware.dart         # Global auth + DI (UserStore, PasswordHasher)
+│   ├── index.dart               # GET / (protected)
 │   ├── auth/
-│   │   └── login.dart     # POST /auth/login
-│   └── index.dart         # GET / (protected)
-├── test/routes/           # Route tests
-├── pubspec.yaml           # Dependencies
-├── analysis_options.yaml  # Lint rules (dart_frog_lint)
-└── .dart_frog/            # Dart Frog internals (generated)
+│   │   ├── login.dart           # POST /auth/login
+│   │   └── register.dart        # POST /auth/register
+│   └── users/
+│       ├── index.dart           # GET /users
+│       └── [id].dart            # GET/PUT/DELETE /users/:id
+├── test/
+│   ├── routes/
+│   │   ├── index_test.dart
+│   │   └── auth/
+│   │       ├── login_test.dart
+│   │       └── register_test.dart
+│   └── lib/auth/
+│       ├── password_hasher_test.dart
+│       └── user_store_test.dart
+├── pubspec.yaml
+└── analysis_options.yaml
 ```
 
 ## Quick Start
@@ -49,7 +70,7 @@ Starts on http://localhost:8080 with hot reload enabled.
 ### Tests
 ```powershell
 dart test                           # Run all tests
-dart test test/routes/index_test.dart  # Run specific test file
+dart test test/routes/auth/register_test.dart  # Run specific test file
 ```
 
 ### Build
@@ -65,22 +86,49 @@ Bearer token (JWT) authentication is enforced globally via `routes/_middleware.d
 
 - **Secret**: set via `JWT_SECRET` env var (falls back to `dev-secret` in development).
 - **Login**: `POST /auth/login` with `{"username": "...", "password": "..."}` returns `{"token": "..."}`.
+- **Register**: `POST /auth/register` with `{"username": "...", "password": "...", "email?": "..."}` returns the created user.
 - **Protected routes**: all routes except `/auth/*` require `Authorization: Bearer <token>`.
 - **User identity**: after auth, route handlers access the user via `context.read<AuthClaims>()`.
-- **User store**: `lib/auth/users.dart` — currently in-memory; swap `UserStore` for a database-backed implementation.
+
+### User Store
+
+`UserStore` is an abstract interface with two implementations:
+
+- **InMemoryUserStore** — used by default in dev. No external dependencies.
+- **SqliteUserStore** — SQLite-backed. To switch, update `routes/_middleware.dart` to initialize and provide a `SqliteUserStore` instead.
+
+Both implementations take a `PasswordHasher` via constructor injection.
+
+### Endpoints
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST   | /auth/login | No | Authenticate, receive JWT |
+| POST   | /auth/register | No | Create new user account |
+| GET    | /      | Bearer | Welcome message |
+| GET    | /users | Bearer | List all users |
+| GET    | /users/:id | Bearer | Get user by ID |
+| PUT    | /users/:id | Bearer | Update user |
+| DELETE | /users/:id | Bearer | Delete user |
 
 ### File-based routing
 - `routes/index.dart` → `GET /`
-- `routes/users.dart` → `GET /users`
-- `routes/users/[id].dart` → `GET /users/:id`
+- `routes/users/index.dart` → `GET /users`
+- `routes/users/[id].dart` → `GET/PUT/DELETE /users/:id`
+- `routes/auth/login.dart` → `POST /auth/login`
+- `routes/auth/register.dart` → `POST /auth/register`
 - Each route file exports an `onRequest(RequestContext)` function.
+- Dynamic segments use `[param].dart` filename syntax.
 
 ### Middleware
-- Use `middleware` in a route file to apply middleware to that route.
 - Global middleware goes in `routes/_middleware.dart`.
+- Subdirectory middleware (`routes/foo/_middleware.dart`) applies only to routes under that directory.
+- Use `handler.use(provider<T>(...))` to inject dependencies into `RequestContext`.
 
 ### Dependency injection
-- Use `RequestContext` to pass dependencies via `context.read<T>()` / `context.use<T>()`.
+- Use `provider<T>(factory)` in middleware to make dependencies available.
+- Routes retrieve them via `context.read<T>()`.
+- Singleton services (UserStore, PasswordHasher) are instantiated at module level and returned by the provider factory.
 
 ## Version Control Guidelines
 
